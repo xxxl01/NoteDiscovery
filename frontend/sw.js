@@ -35,7 +35,7 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch event - network first, fallback to cache for assets
+// Fetch event - prefer fresh assets so UI changes show up immediately
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   
@@ -49,11 +49,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   
-  // For static assets, try cache first then network
+  // For static assets, use network first so updated frontend files are not stuck behind cache.
+  // Fall back to cache when offline.
   if (url.pathname.startsWith('/static/')) {
     event.respondWith(
-      caches.match(event.request)
-        .then((cached) => cached || fetch(event.request))
+      fetch(event.request)
+        .then((response) => {
+          const responseClone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
     );
     return;
   }

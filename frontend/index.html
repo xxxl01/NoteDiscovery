@@ -919,6 +919,47 @@
         .icon-rail-spacer {
             flex: 1;
         }
+
+        /* AI chat panel */
+        .ai-chat-list {
+            padding: 12px;
+            gap: 8px;
+        }
+
+        .ai-chat-bubble {
+            border-radius: 12px;
+            padding: 8px 10px;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        .ai-chat-bubble.user {
+            margin-left: 28px;
+            background-color: var(--accent-light);
+            color: var(--accent-primary);
+        }
+
+        .ai-chat-bubble.assistant {
+            margin-right: 20px;
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .ai-chat-label {
+            font-size: 10px;
+            line-height: 1.2;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-tertiary);
+            margin-bottom: 4px;
+            font-weight: 600;
+        }
+
+        .ai-chat-content {
+            white-space: pre-line;
+            word-break: break-word;
+            margin: 0;
+        }
         
         .icon-rail-logo {
             width: 28px;
@@ -1480,6 +1521,19 @@
                         x-text="backlinks.length > 9 ? '9+' : backlinks.length"
                     ></span>
                 </button>
+
+                <!-- AI Chat -->
+                <button
+                    class="icon-rail-btn"
+                    :class="{'active': activePanel === 'ai', 'opacity-50': !aiEnabled}"
+                    @click="activePanel = 'ai'"
+                    :title="t('ai.title')"
+                    :aria-label="t('ai.title')"
+                >
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5m-7 6l2.2-2H19a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h1v2z"></path>
+                    </svg>
+                </button>
                 
                 <div class="icon-rail-spacer"></div>
                 
@@ -1950,6 +2004,81 @@
                     </div>
                 </div>
                 <!-- END BACKLINKS PANEL -->
+
+                <!-- ==================== AI PANEL ==================== -->
+                <div x-show="activePanel === 'ai'" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" class="flex flex-col h-full">
+                    <div class="flex-shrink-0 px-3 py-2 border-b flex items-center justify-between" style="border-color: var(--border-primary);">
+                        <div>
+                            <span class="text-xs font-semibold uppercase tracking-wide block" style="color: var(--text-tertiary);" x-text="t('ai.title')"></span>
+                            <span class="text-[11px]" style="color: var(--text-tertiary);" x-text="aiModel || t('ai.model_unknown')"></span>
+                        </div>
+                        <button
+                            @click="clearAiChat()"
+                            class="px-2 py-1 text-xs rounded"
+                            style="background-color: var(--bg-tertiary); color: var(--text-secondary);"
+                            :title="t('ai.clear')"
+                        >
+                            <span x-text="t('ai.clear')"></span>
+                        </button>
+                    </div>
+
+                    <div x-show="!aiEnabled" class="p-3">
+                        <div class="text-sm rounded-lg px-3 py-2" style="background-color: var(--bg-tertiary); color: var(--text-secondary);">
+                            <span x-text="t('ai.not_enabled')"></span>
+                        </div>
+                    </div>
+
+                    <div id="ai-messages" x-show="aiEnabled" class="ai-chat-list flex-1 overflow-y-auto custom-scrollbar flex flex-col">
+                        <template x-if="aiMessages.length === 0">
+                            <div class="text-center py-6 px-3">
+                                <svg class="w-12 h-12 mx-auto mb-3 opacity-40" style="color: var(--text-tertiary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 3.75h4.5m-7.5 4.5h10.5M12 8.25v8.25m-5.25-3h10.5M8.25 20.25h7.5"></path>
+                                </svg>
+                                <p class="text-sm mb-2" style="color: var(--text-tertiary);" x-text="t('ai.empty_title')"></p>
+                                <p class="text-xs" style="color: var(--text-tertiary);" x-text="currentNote ? t('ai.note_context_on') : t('ai.note_context_off')"></p>
+                            </div>
+                        </template>
+
+                        <template x-for="(msg, index) in aiMessages" :key="index">
+                            <div class="ai-chat-bubble" :class="msg.role === 'user' ? 'user self-end' : 'assistant self-start'">
+                                <div class="ai-chat-label" x-text="msg.role === 'user' ? t('ai.you') : t('ai.assistant')"></div>
+                                <div class="ai-chat-content" x-text="msg.content"></div>
+                            </div>
+                        </template>
+
+                        <div x-show="aiLoading" x-cloak class="ai-chat-bubble assistant self-start">
+                            <div class="ai-chat-label" x-text="t('ai.assistant')"></div>
+                            <div class="ai-chat-content" x-text="t('ai.thinking')"></div>
+                        </div>
+                    </div>
+
+                    <div class="flex-shrink-0 p-3 border-t" style="border-color: var(--border-primary);" x-show="aiEnabled">
+                        <div x-show="aiError" x-cloak class="mb-2 text-xs rounded px-2 py-1.5" style="background-color: rgba(239, 68, 68, 0.12); color: #dc2626;" x-text="aiError"></div>
+                        <div x-show="currentNote" x-cloak class="mb-2 text-xs rounded px-2 py-1.5" style="background-color: var(--bg-tertiary); color: var(--text-secondary);">
+                            <span x-text="t('ai.using_note', { name: currentNoteName || currentNote })"></span>
+                        </div>
+                        <textarea
+                            x-model="aiPrompt"
+                            rows="3"
+                            class="w-full px-3 py-2 text-sm rounded focus:outline-none focus:ring-2 focus:ring-opacity-50 resize-none"
+                            style="background-color: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-primary);"
+                            :placeholder="t('ai.placeholder')"
+                            @keydown.ctrl.enter.prevent="sendAiMessage()"
+                        ></textarea>
+                        <div class="mt-2 flex items-center justify-between gap-2">
+                            <span class="text-[11px]" style="color: var(--text-tertiary);" x-text="t('ai.send_hint')"></span>
+                            <button
+                                @click="sendAiMessage()"
+                                class="px-3 py-2 text-sm font-medium text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                style="background-color: var(--accent-primary);"
+                                :disabled="aiLoading || !aiPrompt.trim()"
+                            >
+                                <span x-text="aiLoading ? t('ai.thinking') : t('ai.send')"></span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <!-- END AI PANEL -->
 
                 <!-- ==================== SETTINGS PANEL ==================== -->
                 <template x-if="activePanel === 'settings'">
@@ -3408,6 +3537,17 @@
                 style="background-color: var(--accent-primary); color: white;"
                 x-text="searchResults.length > 9 ? '9+' : searchResults.length"
             ></span>
+        </button>
+        <button
+            class="mobile-bottom-tab"
+            :class="{'active': activePanel === 'ai' && mobileSidebarOpen, 'opacity-50': !aiEnabled}"
+            @click="activePanel = 'ai'; mobileSidebarOpen = true;"
+            :aria-label="t('ai.title')"
+        >
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5m-7 6l2.2-2H19a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h1v2z"></path>
+            </svg>
+            <span x-text="t('ai.title')"></span>
         </button>
         <button 
             class="mobile-bottom-tab"

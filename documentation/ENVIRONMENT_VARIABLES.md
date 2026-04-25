@@ -37,6 +37,42 @@ AUTHENTICATION_PASSWORD=mysecretpassword
 |----------|------|---------|-------------|
 | `DEMO_MODE` | boolean | `false` | Enable demo mode (enables rate limiting and other demo restrictions) |
 
+### AI Chat
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `AI_ENABLED` | boolean | `config.yaml` | Enable/disable the built-in AI chat panel |
+| `AI_BASE_URL` | string | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
+| `AI_API_KEY` | string | - | API key for the AI provider |
+| `AI_MODEL` | string | `gpt-4.1-mini` | Chat model name |
+| `AI_SYSTEM_PROMPT` | string | `config.yaml` | System prompt sent with each chat request |
+
+#### Example: DeepSeek via environment variables
+
+```bash
+# Local shell
+export AI_ENABLED=true
+export AI_BASE_URL=https://api.deepseek.com/v1
+export AI_API_KEY=your_deepseek_api_key
+export AI_MODEL=deepseek-v4-flash
+
+# Docker
+docker run \
+  -e AI_ENABLED=true \
+  -e AI_BASE_URL=https://api.deepseek.com/v1 \
+  -e AI_API_KEY=your_deepseek_api_key \
+  -e AI_MODEL=deepseek-v4-flash \
+  ...
+```
+
+```powershell
+# Windows PowerShell
+$env:AI_ENABLED='true'
+$env:AI_BASE_URL='https://api.deepseek.com/v1'
+$env:AI_API_KEY='your_deepseek_api_key'
+$env:AI_MODEL='deepseek-v4-flash'
+```
+
 ### Support
 
 | Variable | Type | Default | Description |

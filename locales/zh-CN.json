@@ -116,6 +116,24 @@
     "remove_favorite": "从收藏夹移除"
   },
 
+  "ai": {
+    "title": "AI",
+    "clear": "清空",
+    "send": "发送",
+    "thinking": "思考中...",
+    "not_enabled": "AI 功能未启用，或当前前端状态还没有读取到启用配置。",
+    "placeholder": "输入你的问题，Ctrl+Enter 发送",
+    "send_hint": "Ctrl+Enter 发送",
+    "empty_title": "开始和 AI 对话",
+    "note_context_on": "当前会自动携带已打开笔记的上下文。",
+    "note_context_off": "打开一篇笔记后，AI 会自动带上它的上下文。",
+    "using_note": "当前上下文：{{name}}",
+    "assistant": "助手",
+    "you": "你",
+    "model_unknown": "未配置模型",
+    "error_reply": "这次请求失败了，请检查 AI 配置后再试。"
+  },
+
   "zen_mode": {
     "title": "禅模式",
     "tooltip": "禅模式 (Ctrl+Alt+Z)",

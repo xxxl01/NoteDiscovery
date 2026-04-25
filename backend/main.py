@@ -12,15 +12,19 @@ from starlette.middleware.sessions import SessionMiddleware
 import os
 import yaml
 import json
+import asyncio
 from pathlib import Path
 from typing import List, Optional
 import aiofiles
 from datetime import datetime
 import bcrypt
 import secrets
+from urllib import request as urllib_request
+from urllib import error as urllib_error
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from pydantic import BaseModel
 
 from .utils import (
     scan_notes_fast_walk,
@@ -122,6 +126,24 @@ elif config.get('authentication', {}).get('api_key', '').strip():
     print("🔑 API key loaded from config.yaml")
 else:
     config['authentication']['api_key'] = ''
+
+# AI configuration overrides
+config.setdefault('ai', {})
+
+if 'AI_ENABLED' in os.environ:
+    config['ai']['enabled'] = os.getenv('AI_ENABLED', 'false').lower() in ('true', '1', 'yes')
+
+if 'AI_BASE_URL' in os.environ and os.getenv('AI_BASE_URL', '').strip():
+    config['ai']['base_url'] = os.getenv('AI_BASE_URL', '').strip()
+
+if 'AI_API_KEY' in os.environ:
+    config['ai']['api_key'] = os.getenv('AI_API_KEY', '').strip()
+
+if 'AI_MODEL' in os.environ and os.getenv('AI_MODEL', '').strip():
+    config['ai']['model'] = os.getenv('AI_MODEL', '').strip()
+
+if 'AI_SYSTEM_PROMPT' in os.environ and os.getenv('AI_SYSTEM_PROMPT', '').strip():
+    config['ai']['system_prompt'] = os.getenv('AI_SYSTEM_PROMPT', '').strip()
 
 # Warnings for missing authentication methods (only when auth is enabled)
 if config.get('authentication', {}).get('enabled', False):
@@ -475,6 +497,108 @@ pages_router = APIRouter(
 )
 
 
+class AIChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class AIChatRequest(BaseModel):
+    message: str
+    messages: List[AIChatMessage] = []
+    note_path: Optional[str] = None
+    note_content: Optional[str] = None
+
+
+def ai_enabled() -> bool:
+    return config.get('ai', {}).get('enabled', False)
+
+
+def build_ai_messages(payload: AIChatRequest) -> List[dict]:
+    ai_config = config.get('ai', {})
+    system_prompt = ai_config.get(
+        'system_prompt',
+        'You are a helpful note-taking assistant. Be concise and practical.'
+    )
+    include_current_note = ai_config.get('include_current_note', True)
+    max_context_chars = int(ai_config.get('max_context_chars', 12000) or 12000)
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    note_content = (payload.note_content or "").strip()
+    if include_current_note and note_content:
+        if len(note_content) > max_context_chars:
+            note_content = note_content[:max_context_chars]
+        note_label = payload.note_path or "current note"
+        messages.append({
+            "role": "system",
+            "content": f"Current note path: {note_label}\n\nCurrent note content:\n{note_content}"
+        })
+
+    for item in payload.messages[-10:]:
+        role = item.role if item.role in {"user", "assistant", "system"} else "user"
+        content = (item.content or "").strip()
+        if content:
+            messages.append({"role": role, "content": content[:4000]})
+
+    user_message = (payload.message or "").strip()
+    if user_message:
+        messages.append({"role": "user", "content": user_message[:4000]})
+
+    return messages
+
+
+def call_openai_compatible_chat(payload: AIChatRequest) -> str:
+    ai_config = config.get('ai', {})
+    api_key = ai_config.get('api_key', '').strip()
+    base_url = ai_config.get('base_url', 'https://api.openai.com/v1').rstrip('/')
+    model = ai_config.get('model', 'gpt-4.1-mini').strip()
+
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI API key is not configured")
+
+    request_payload = json.dumps({
+        "model": model,
+        "messages": build_ai_messages(payload),
+        "temperature": 0.7,
+    }).encode('utf-8')
+
+    req = urllib_request.Request(
+        url=f"{base_url}/chat/completions",
+        data=request_payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=60) as response:
+            raw_body = response.read().decode('utf-8')
+    except urllib_error.HTTPError as e:
+        error_body = e.read().decode('utf-8', errors='replace')
+        try:
+            error_json = json.loads(error_body)
+            detail = error_json.get('error', {}).get('message') or error_body
+        except json.JSONDecodeError:
+            detail = error_body or f"AI provider returned HTTP {e.code}"
+        raise HTTPException(status_code=502, detail=detail[:500])
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=safe_error_message(e, "Failed to contact AI provider"))
+
+    try:
+        response_json = json.loads(raw_body)
+        content = response_json['choices'][0]['message']['content']
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as e:
+        raise HTTPException(status_code=502, detail=safe_error_message(e, "Invalid AI response"))
+
+    if isinstance(content, list):
+        text_parts = [part.get('text', '') for part in content if isinstance(part, dict)]
+        return ''.join(text_parts).strip()
+
+    return str(content).strip()
+
+
 # ============================================================================
 # Application Routes (with auth via router dependencies)
 # ============================================================================
@@ -490,6 +614,10 @@ async def get_config():
         "alreadyDonated": ALREADY_DONATED,  # Hide support buttons if true
         "authentication": {
             "enabled": config.get('authentication', {}).get('enabled', False)
+        },
+        "ai": {
+            "enabled": ai_enabled(),
+            "model": config.get('ai', {}).get('model', '')
         }
     }
 
@@ -500,6 +628,22 @@ async def list_themes():
     themes_dir = Path(__file__).parent.parent / "themes"
     themes = get_available_themes(str(themes_dir))
     return {"themes": themes}
+
+
+@api_router.post("/ai/chat", tags=["System"])
+async def ai_chat(payload: AIChatRequest):
+    """Minimal AI chat endpoint using an OpenAI-compatible API."""
+    if not ai_enabled():
+        raise HTTPException(status_code=503, detail="AI chat is disabled")
+
+    if not (payload.message or "").strip():
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    reply = await asyncio.to_thread(call_openai_compatible_chat, payload)
+    return {
+        "reply": reply,
+        "model": config.get('ai', {}).get('model', ''),
+    }
 
 
 @app.get("/api/themes/{theme_id}", tags=["Themes"]) # Don't use the router here, as we want this route unsecured

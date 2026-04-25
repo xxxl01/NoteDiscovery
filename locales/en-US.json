@@ -117,6 +117,24 @@
     "remove_favorite": "Remove from favorites"
   },
 
+  "ai": {
+    "title": "AI",
+    "clear": "Clear",
+    "send": "Send",
+    "thinking": "Thinking...",
+    "not_enabled": "AI is not enabled, or the frontend has not picked up the enabled config yet.",
+    "placeholder": "Ask something, then press Ctrl+Enter to send",
+    "send_hint": "Ctrl+Enter to send",
+    "empty_title": "Start chatting with AI",
+    "note_context_on": "The currently open note will be included as context.",
+    "note_context_off": "Open a note and AI will automatically use it as context.",
+    "using_note": "Current context: {{name}}",
+    "assistant": "Assistant",
+    "you": "You",
+    "model_unknown": "Model not configured",
+    "error_reply": "This request failed. Check your AI settings and try again."
+  },
+
   "zen_mode": {
     "title": "Zen Mode",
     "tooltip": "Zen Mode (Ctrl+Alt+Z)",
