@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NoteDiscovery AI</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  </head>
+  <body class="h-screen overflow-hidden bg-stone-100 text-stone-900">
+    <div id="ai-workspace" class="h-screen overflow-hidden">
+      <div
+        class="mx-auto flex h-full max-w-[1600px] flex-col px-3 py-3 sm:px-4"
+      >
+        <header
+          class="mb-3 flex flex-shrink-0 items-center justify-between rounded-2xl border border-stone-200 bg-white px-4 py-3 shadow-sm"
+        >
+          <div class="min-w-0">
+            <div
+              class="text-[11px] font-semibold uppercase tracking-[0.24em] text-stone-500"
+            >
+              AI Workspace
+            </div>
+            <div class="mt-1 flex items-center gap-3">
+              <h1 class="truncate text-lg font-semibold text-stone-900">
+                快速记录
+              </h1>
+              <span class="hidden text-xs text-stone-500 sm:inline"
+                >问答式，多笔记上下文</span
+              >
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div
+              class="rounded-xl bg-stone-900 px-3 py-2 text-xs font-medium text-white"
+            >
+              {{ aiModelLabel }}
+            </div>
+            <a
+              href="/"
+              class="rounded-xl border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 transition hover:bg-stone-100"
+              >返回</a
+            >
+          </div>
+        </header>
+
+        <div
+          class="grid min-h-0 flex-1 gap-3 lg:grid-cols-[360px_minmax(0,1fr)]"
+        >
+          <aside
+            class="flex min-h-0 flex-col rounded-2xl border border-stone-200 bg-white shadow-sm"
+          >
+            <div class="flex-shrink-0 border-b border-stone-200 px-3 py-3">
+              <div class="mb-2 flex items-center justify-between gap-2">
+                <div
+                  class="text-xs font-semibold uppercase tracking-wide text-stone-500"
+                >
+                  笔记上下文
+                </div>
+                <div class="text-xs text-stone-500">
+                  已选 {{ selectedCount }}
+                </div>
+              </div>
+
+              <label class="block">
+                <input
+                  v-model.trim="noteSearch"
+                  type="text"
+                  placeholder="搜索标题或路径"
+                  class="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm outline-none transition focus:border-stone-500"
+                />
+              </label>
+
+              <div class="mt-2 flex gap-2">
+                <button
+                  @click="refreshNotesIndex()"
+                  class="rounded-xl border border-stone-300 px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-100"
+                >
+                  刷新
+                </button>
+                <button
+                  @click="selectTopFilteredNotes()"
+                  class="rounded-xl border border-stone-300 px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-100"
+                >
+                  选中前 5 个
+                </button>
+                <button
+                  @click="clearSelectedNotes()"
+                  class="rounded-xl border border-stone-300 px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-100"
+                >
+                  清空
+                </button>
+              </div>
+            </div>
+
+            <div class="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+              <div v-if="loadingNotes" class="px-2 py-4 text-sm text-stone-500">
+                正在加载笔记...
+              </div>
+              <div v-else-if="error" class="px-2 py-4 text-sm text-red-600">
+                加载笔记失败：{{ error }}
+              </div>
+              <div
+                v-else-if="noteSearch && filteredNotesCount === 0"
+                class="px-2 py-4 text-sm text-stone-500"
+              >
+                没有匹配的笔记。
+              </div>
+
+              <div
+                v-else-if="noteSearch"
+                class="overflow-hidden rounded-xl border border-stone-200"
+              >
+                <label
+                  v-for="note in filteredNotes"
+                  :key="note.path"
+                  class="flex cursor-pointer items-start gap-3 border-b border-stone-100 px-3 py-2.5 transition hover:bg-stone-50"
+                >
+                  <input
+                    type="checkbox"
+                    class="mt-1 h-4 w-4 rounded border-stone-300 text-stone-900 focus:ring-stone-500"
+                    :checked="selectedPaths.includes(note.path)"
+                    @change="toggleNote(note.path)"
+                  />
+                  <div class="min-w-0">
+                    <div class="truncate text-sm font-medium text-stone-900">
+                      {{ note.name || noteLabel(note.path) }}
+                    </div>
+                    <div class="truncate text-xs text-stone-500">
+                      {{ note.path }}
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              <div v-else class="text-sm">
+                <div
+                  class="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-stone-500"
+                >
+                  文件夹与笔记
+                </div>
+
+                <div
+                  v-if="showEmptyTree"
+                  class="px-2 py-4 text-sm text-stone-500"
+                >
+                  当前没有可显示的笔记。
+                </div>
+
+                <template v-for="item in visibleTreeItems" :key="item.key">
+                  <button
+                    v-if="item.kind === 'folder'"
+                    @click="toggleFolder(item.path)"
+                    class="mb-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-stone-50"
+                    :style="{ paddingLeft: ((item.level * 18) + 8) + 'px' }"
+                  >
+                    <span
+                      class="inline-flex h-4 w-4 items-center justify-center text-stone-500"
+                    >
+                      <svg
+                        class="h-3 w-3 transition-transform"
+                        :class="{ 'rotate-90': item.expanded }"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M9 5l7 7-7 7"
+                        ></path>
+                      </svg>
+                    </span>
+                    <span class="truncate text-sm font-medium text-stone-800"
+                      >{{ item.name }}</span
+                    >
+                    <span class="ml-auto text-[11px] text-stone-400"
+                      >{{ item.noteCount || 0 }}</span
+                    >
+                  </button>
+
+                  <label
+                    v-else
+                    class="mb-0.5 flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 transition hover:bg-stone-50"
+                    :style="{ paddingLeft: ((item.level * 18) + 24) + 'px' }"
+                  >
+                    <input
+                      type="checkbox"
+                      class="mt-1 h-4 w-4 rounded border-stone-300 text-stone-900 focus:ring-stone-500"
+                      :checked="selectedPaths.includes(item.path)"
+                      @change="toggleNote(item.path)"
+                    />
+                    <div class="min-w-0">
+                      <div class="truncate text-sm text-stone-800">
+                        {{ item.name || noteLabel(item.path) }}
+                      </div>
+                    </div>
+                  </label>
+                </template>
+              </div>
+            </div>
+          </aside>
+
+          <main
+            class="flex min-h-0 flex-col rounded-2xl border border-stone-200 bg-white shadow-sm"
+          >
+            <section class="flex-shrink-0 border-b border-stone-200 px-4 py-3">
+              <div class="mb-2 flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2">
+                  <button
+                    @click="workspaceMode = 'chat'"
+                    class="rounded-full px-3 py-1.5 text-xs font-medium transition"
+                    :class="workspaceMode === 'chat' ? 'bg-stone-900 text-white' : 'border border-stone-300 text-stone-700 hover:bg-stone-100'"
+                  >
+                    AI 问答
+                  </button>
+                  <button
+                    @click="workspaceMode = 'capture'"
+                    class="rounded-full px-3 py-1.5 text-xs font-medium transition"
+                    :class="workspaceMode === 'capture' ? 'bg-stone-900 text-white' : 'border border-stone-300 text-stone-700 hover:bg-stone-100'"
+                  >
+                    快速暂存
+                  </button>
+                </div>
+                <div class="text-xs text-stone-500">
+                  {{ workspaceMode === 'chat' ? '自由问答模式' : '直接落到 inbox/' }}
+                </div>
+              </div>
+              <div v-if="workspaceMode === 'chat'" class="flex flex-wrap gap-2">
+                <button
+                  v-for="item in quickPrompts"
+                  :key="item.label"
+                  @click="applyQuickPrompt(item.prompt)"
+                  class="rounded-full border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:border-stone-900 hover:text-stone-900"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
+            </section>
+
+            <section class="flex min-h-0 flex-1 flex-col px-4 py-3">
+              <div
+                v-if="workspaceMode === 'capture'"
+                class="min-h-0 flex flex-1 flex-col"
+              >
+                <textarea
+                  v-model.trim="input"
+                  class="min-h-0 flex-1 resize-none rounded-2xl border border-stone-300 bg-stone-50 px-5 py-4 text-sm leading-7 outline-none transition focus:border-stone-500"
+                  placeholder="直接粘贴内容。提交后会在 inbox/ 下生成一篇独立笔记，标题取开头几个字符。"
+                  @keydown.ctrl.enter.prevent="sendMessage"
+                ></textarea>
+                <div
+                  v-if="lastCapturePath"
+                  class="mt-3 flex-shrink-0 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700"
+                >
+                  上次暂存：{{ lastCapturePath }}
+                </div>
+              </div>
+
+              <div
+                v-else
+                class="min-h-0 flex-1 overflow-y-auto rounded-2xl bg-stone-50 p-4"
+              >
+                <div
+                  v-if="messageCount === 0"
+                  class="flex h-full items-center justify-center text-center text-sm text-stone-500"
+                >
+                  直接提问，或者先选几篇笔记，再让 AI
+                  基于这些内容帮你整理和记录。
+                </div>
+                <div
+                  v-for="(msg, index) in messages"
+                  :key="index"
+                  class="mb-3 flex"
+                  :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
+                >
+                  <div
+                    class="max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm"
+                    :class="msg.role === 'user' ? 'border border-stone-200 bg-stone-200 text-stone-900' : 'border border-stone-200 bg-white text-stone-800'"
+                  >
+                    <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                  </div>
+                </div>
+                <div v-if="sending" class="text-sm text-stone-500">
+                  AI 正在思考...
+                </div>
+              </div>
+
+              <div
+                v-if="error"
+                class="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+              >
+                {{ error }}
+              </div>
+
+              <label v-if="workspaceMode === 'chat'" class="mt-3 block flex-shrink-0">
+                <textarea
+                  v-model.trim="input"
+                  rows="3"
+                  :placeholder="workspaceMode === 'chat' ? '直接记录，或者提问：请基于已选笔记帮我整理今天的开发思路' : '直接粘贴，发送后会生成 inbox 下的独立笔记'"
+                  class="w-full rounded-2xl border border-stone-300 px-4 py-3 text-sm leading-6 outline-none transition focus:border-stone-500"
+                  @keydown.ctrl.enter.prevent="sendMessage"
+                ></textarea>
+              </label>
+
+              <div
+                class="mt-3 flex flex-shrink-0 items-center justify-between gap-3"
+              >
+                <div class="text-xs text-stone-500">
+                  {{ workspaceMode === 'chat' ? 'Ctrl+Enter 发送。页面本身不滚动，只有左树和对话区滚动。' : 'Ctrl+Enter 暂存。不会调用 AI。' }}
+                </div>
+                <div class="flex gap-2">
+                  <button
+                    @click="clearMessages"
+                    class="rounded-xl border border-stone-300 px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-100"
+                  >
+                    {{ workspaceMode === 'chat' ? '清空' : '清空状态' }}
+                  </button>
+                  <button
+                    @click="sendMessage"
+                    :disabled="sending || !input"
+                    class="rounded-xl bg-stone-900 px-4 py-2 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {{ sending ? (workspaceMode === 'chat' ? '发送中...' : '暂存中...') : (workspaceMode === 'chat' ? '发送' : '暂存') }}
+                  </button>
+                </div>
+              </div>
+            </section>
+          </main>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/notes-api.js"></script>
+    <script src="/static/ai-workspace.js"></script>
+  </body>
+</html>

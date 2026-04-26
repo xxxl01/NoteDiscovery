@@ -9,6 +9,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from backend.env_loader import load_dotenv_file
+
 try:
     import colorama
     colorama.just_fix_windows_console()
@@ -37,6 +39,8 @@ def get_port():
     return "8000"
 
 def main():
+    load_dotenv_file(Path(".env"))
+
     print("🚀 Starting NoteDiscovery...\n")
     
     # Check if requirements are installed

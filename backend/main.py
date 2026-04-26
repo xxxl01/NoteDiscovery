@@ -11,7 +11,6 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHea
 from starlette.middleware.sessions import SessionMiddleware
 import os
 import yaml
-import json
 import asyncio
 from pathlib import Path
 from typing import List, Optional
@@ -19,13 +18,13 @@ import aiofiles
 from datetime import datetime
 import bcrypt
 import secrets
-from urllib import request as urllib_request
-from urllib import error as urllib_error
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from pydantic import BaseModel
 
+from .ai import AIChatRequest, InboxCaptureRequest, ai_enabled, call_openai_compatible_chat
+from .capture import build_unique_inbox_note_path
+from .env_loader import load_dotenv_file
 from .utils import (
     scan_notes_fast_walk,
     get_note_content,
@@ -62,6 +61,9 @@ from .share import (
     get_all_shared_paths,
 )
 from .export import generate_export_html, embed_images_as_base64, convert_wikilinks_to_html, strip_frontmatter
+
+# Load local .env before reading environment overrides.
+load_dotenv_file(Path(__file__).parent.parent / ".env")
 
 # Load configuration
 config_path = Path(__file__).parent.parent / "config.yaml"
@@ -497,108 +499,6 @@ pages_router = APIRouter(
 )
 
 
-class AIChatMessage(BaseModel):
-    role: str
-    content: str
-
-
-class AIChatRequest(BaseModel):
-    message: str
-    messages: List[AIChatMessage] = []
-    note_path: Optional[str] = None
-    note_content: Optional[str] = None
-
-
-def ai_enabled() -> bool:
-    return config.get('ai', {}).get('enabled', False)
-
-
-def build_ai_messages(payload: AIChatRequest) -> List[dict]:
-    ai_config = config.get('ai', {})
-    system_prompt = ai_config.get(
-        'system_prompt',
-        'You are a helpful note-taking assistant. Be concise and practical.'
-    )
-    include_current_note = ai_config.get('include_current_note', True)
-    max_context_chars = int(ai_config.get('max_context_chars', 12000) or 12000)
-
-    messages = [{"role": "system", "content": system_prompt}]
-
-    note_content = (payload.note_content or "").strip()
-    if include_current_note and note_content:
-        if len(note_content) > max_context_chars:
-            note_content = note_content[:max_context_chars]
-        note_label = payload.note_path or "current note"
-        messages.append({
-            "role": "system",
-            "content": f"Current note path: {note_label}\n\nCurrent note content:\n{note_content}"
-        })
-
-    for item in payload.messages[-10:]:
-        role = item.role if item.role in {"user", "assistant", "system"} else "user"
-        content = (item.content or "").strip()
-        if content:
-            messages.append({"role": role, "content": content[:4000]})
-
-    user_message = (payload.message or "").strip()
-    if user_message:
-        messages.append({"role": "user", "content": user_message[:4000]})
-
-    return messages
-
-
-def call_openai_compatible_chat(payload: AIChatRequest) -> str:
-    ai_config = config.get('ai', {})
-    api_key = ai_config.get('api_key', '').strip()
-    base_url = ai_config.get('base_url', 'https://api.openai.com/v1').rstrip('/')
-    model = ai_config.get('model', 'gpt-4.1-mini').strip()
-
-    if not api_key:
-        raise HTTPException(status_code=503, detail="AI API key is not configured")
-
-    request_payload = json.dumps({
-        "model": model,
-        "messages": build_ai_messages(payload),
-        "temperature": 0.7,
-    }).encode('utf-8')
-
-    req = urllib_request.Request(
-        url=f"{base_url}/chat/completions",
-        data=request_payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST"
-    )
-
-    try:
-        with urllib_request.urlopen(req, timeout=60) as response:
-            raw_body = response.read().decode('utf-8')
-    except urllib_error.HTTPError as e:
-        error_body = e.read().decode('utf-8', errors='replace')
-        try:
-            error_json = json.loads(error_body)
-            detail = error_json.get('error', {}).get('message') or error_body
-        except json.JSONDecodeError:
-            detail = error_body or f"AI provider returned HTTP {e.code}"
-        raise HTTPException(status_code=502, detail=detail[:500])
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=safe_error_message(e, "Failed to contact AI provider"))
-
-    try:
-        response_json = json.loads(raw_body)
-        content = response_json['choices'][0]['message']['content']
-    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as e:
-        raise HTTPException(status_code=502, detail=safe_error_message(e, "Invalid AI response"))
-
-    if isinstance(content, list):
-        text_parts = [part.get('text', '') for part in content if isinstance(part, dict)]
-        return ''.join(text_parts).strip()
-
-    return str(content).strip()
-
-
 # ============================================================================
 # Application Routes (with auth via router dependencies)
 # ============================================================================
@@ -616,7 +516,7 @@ async def get_config():
             "enabled": config.get('authentication', {}).get('enabled', False)
         },
         "ai": {
-            "enabled": ai_enabled(),
+            "enabled": ai_enabled(config),
             "model": config.get('ai', {}).get('model', '')
         }
     }
@@ -633,16 +533,92 @@ async def list_themes():
 @api_router.post("/ai/chat", tags=["System"])
 async def ai_chat(payload: AIChatRequest):
     """Minimal AI chat endpoint using an OpenAI-compatible API."""
-    if not ai_enabled():
+    if not ai_enabled(config):
         raise HTTPException(status_code=503, detail="AI chat is disabled")
 
     if not (payload.message or "").strip():
         raise HTTPException(status_code=400, detail="Message is required")
 
-    reply = await asyncio.to_thread(call_openai_compatible_chat, payload)
+    reply = await asyncio.to_thread(call_openai_compatible_chat, config, payload, safe_error_message)
     return {
         "reply": reply,
         "model": config.get('ai', {}).get('model', ''),
+    }
+
+
+@api_router.post("/ai/workspace-chat", tags=["System"])
+async def ai_workspace_chat(payload: AIChatRequest):
+    """AI chat endpoint for the dedicated AI workspace with multi-note context."""
+    if not ai_enabled(config):
+        raise HTTPException(status_code=503, detail="AI chat is disabled")
+
+    if not (payload.message or "").strip():
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    selected_notes = []
+    for note_path in (payload.note_paths or [])[:20]:
+        normalized_path = (note_path or "").strip()
+        if not normalized_path:
+            continue
+
+        content = get_note_content(config['storage']['notes_dir'], normalized_path)
+        if content is None:
+            continue
+
+        transformed_content = plugin_manager.run_hook('on_note_load', note_path=normalized_path, content=content)
+        if transformed_content is not None:
+            content = transformed_content
+
+        selected_notes.append({
+            "path": normalized_path,
+            "content": content,
+        })
+
+    workspace_payload = AIChatRequest(
+        message=payload.message,
+        messages=payload.messages,
+        note_path=payload.note_path,
+        note_content=payload.note_content,
+        note_paths=payload.note_paths,
+        selected_notes=selected_notes,
+    )
+
+    reply = await asyncio.to_thread(call_openai_compatible_chat, config, workspace_payload, safe_error_message)
+    return {
+        "reply": reply,
+        "model": config.get('ai', {}).get('model', ''),
+        "selected_notes_count": len(selected_notes),
+    }
+
+
+@api_router.post("/inbox/capture", tags=["Notes"])
+@limiter.limit("120/minute")
+async def capture_to_inbox(request: Request, payload: InboxCaptureRequest):
+    """Create a standalone inbox note from raw pasted content."""
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Content is required")
+
+    note_path = build_unique_inbox_note_path(config['storage']['notes_dir'], content)
+
+    note_content = plugin_manager.run_hook_with_return(
+        'on_note_create',
+        note_path=note_path,
+        initial_content=content
+    )
+    transformed_content = plugin_manager.run_hook('on_note_save', note_path=note_path, content=note_content)
+    if transformed_content is None:
+        transformed_content = note_content
+
+    success = save_note(config['storage']['notes_dir'], note_path, transformed_content)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save inbox note")
+
+    return {
+        "success": True,
+        "path": note_path,
+        "title": Path(note_path).stem,
+        "message": "Inbox note created successfully",
     }
 
 
@@ -1998,6 +1974,17 @@ async def health_check():
         "app": config['app']['name'],
         "version": config['app']['version']
     }
+
+
+@pages_router.get("/ai", response_class=HTMLResponse)
+@limiter.limit("120/minute")
+async def ai_workspace_page(request: Request):
+    """Serve the dedicated AI workspace page."""
+    ai_path = static_path / "ai.html"
+    async with aiofiles.open(ai_path, 'r', encoding='utf-8') as f:
+        content = await f.read()
+    app_name = config['app']['name']
+    return content.replace('<title>NoteDiscovery AI</title>', f'<title>{app_name} AI</title>')
 
 
 # Catch-all route for SPA (Single Page Application) routing
